@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Readio</string>
+    <string name="login">Log In</string>
+    <string name="register">Create Account</string>
+    <string name="email">Email</string>
+    <string name="password">Password</string>
+    <string name="confirm_password">Confirm Password</string>
+    <string name="display_name">Your Name</string>
+    <string name="sign_in_with_google">Sign in with Google</string>
+    <string name="no_account">Don\'t have an account? Sign up</string>
+    <string name="have_account">Already have an account? Log in</string>
+    <string name="library">Library</string>
+    <string name="convert">Convert</string>
+    <string name="pick_local">Pick from Device</string>
+    <string name="pick_drive">Pick from Google Drive</string>
+    <string name="convert_to_audio">Convert to Audio</string>
+    <string name="empty_library">No audiobooks yet.\nTap + to add your first book.</string>
+</resources>

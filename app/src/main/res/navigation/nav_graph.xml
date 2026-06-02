@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/libraryFragment">
+
+    <fragment
+        android:id="@+id/libraryFragment"
+        android:name="com.audiobookapp.ui.library.LibraryFragment"
+        android:label="Library"
+        tools:layout="@layout/fragment_library">
+
+        <action
+            android:id="@+id/action_library_to_player"
+            app:destination="@id/playerFragment" />
+
+        <action
+            android:id="@+id/action_library_to_converter"
+            app:destination="@id/converterFragment" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/converterFragment"
+        android:name="com.audiobookapp.ui.converter.ConverterFragment"
+        android:label="Convert"
+        tools:layout="@layout/fragment_converter">
+
+        <action
+            android:id="@+id/action_converter_to_library"
+            app:destination="@id/libraryFragment"
+            app:popUpTo="@id/libraryFragment"
+            app:popUpToInclusive="true" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/playerFragment"
+        android:name="com.audiobookapp.ui.player.PlayerFragment"
+        android:label="Player"
+        tools:layout="@layout/fragment_player">
+
+        <argument
+            android:name="bookId"
+            app:argType="integer" />
+    </fragment>
+
+</navigation>

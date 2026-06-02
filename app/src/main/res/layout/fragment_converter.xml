@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/colorBackground"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Add a Book"
+            android:textColor="@color/white"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"
+            android:layout_marginTop="8dp"/>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Supports PDF, DOCX, TXT, EPUB"
+            android:textColor="@color/colorTextSecondary"
+            android:textSize="13sp"
+            android:layout_marginBottom="24dp"/>
+
+        <Button
+            android:id="@+id/btn_pick_local"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:text="📁  Pick from Device"
+            style="@style/Widget.App.OutlinedButton"
+            android:layout_marginBottom="12dp"/>
+
+        <Button
+            android:id="@+id/btn_pick_drive"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:text="☁️  Pick from Google Drive"
+            style="@style/Widget.App.OutlinedButton"
+            android:layout_marginBottom="24dp"/>
+
+        <!-- Selected file card -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/card_file_info"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="@color/colorCard"
+            app:cardCornerRadius="12dp"
+            android:layout_marginBottom="24dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Selected file"
+                    android:textColor="@color/colorTextSecondary"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/tv_selected_file"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/white"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="4dp" />
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Convert button -->
+        <Button
+            android:id="@+id/btn_convert"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:text="Convert to Audio"
+            style="@style/Widget.App.Button"
+            android:enabled="false"
+            android:layout_marginBottom="12dp"/>
+
+        <!-- Shown during conversion so user can go listen to older books -->
+        <Button
+            android:id="@+id/btn_go_library"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="Go to Library →"
+            style="@style/Widget.App.OutlinedButton"
+            android:visibility="gone"
+            android:layout_marginBottom="20dp"/>
+
+        <!-- Progress group -->
+        <LinearLayout
+            android:id="@+id/progress_group"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/tv_progress_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Processing…"
+                android:textColor="@color/white"
+                android:textSize="14sp"
+                android:layout_marginBottom="8dp" />
+
+            <ProgressBar
+                android:id="@+id/progress_bar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="8dp"
+                android:max="100"
+                android:progressTint="@color/colorSecondary"
+                android:indeterminateTint="@color/colorSecondary" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>
