@@ -55,39 +55,24 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
 
-      - name: Create release tag and upload APK
+      - name: Create release and upload APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="build-${{ github.run_number }}"
-          
-          # Create tag via API
-          curl -s -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository }}/git/refs \
-            -d "{\"ref\":\"refs/tags/${TAG}\",\"sha\":\"${{ github.sha }}\"}"
+          APK="app/build/outputs/apk/debug/app-debug.apk"
 
-          # Create release via API
-          RELEASE=$(curl -s -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository }}/releases \
-            -d "{
-              \"tag_name\":\"${TAG}\",
-              \"name\":\"Readio Debug Build #${{ github.run_number }}\",
-              \"body\":\"Commit: ${{ github.sha }}\n${{ github.event.head_commit.message }}\",
-              \"draft\":false,
-              \"prerelease\":true
-            }")
+          # Delete tag if it already exists (retry safety)
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          git push origin ":refs/tags/$TAG" 2>/dev/null || true
 
-          UPLOAD_URL=$(echo $RELEASE | python3 -c "import sys,json; print(json.load(sys.stdin)['upload_url'].split('{')[0])")
-          echo "Upload URL: $UPLOAD_URL"
+          # Create release with APK attached in one command
+          gh release create "$TAG" "$APK" \
+            --title "Readio Debug Build #${{ github.run_number }}" \
+            --notes "Commit: ${{ github.sha }}
+          ${{ github.event.head_commit.message }}" \
+            --prerelease
 
-          # Upload APK
-          curl -s -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: application/vnd.android.package-archive" \
-            --data-binary @app/build/outputs/apk/debug/app-debug.apk \
-            "${UPLOAD_URL}?name=app-debug.apk&label=Readio+Debug+APK"
-
-          echo "Done — release ${TAG} created"
+          echo "✅ Release $TAG created"
+          echo "📦 Download: https://github.com/${{ github.repository }}/releases/tag/$TAG"
