@@ -2,7 +2,7 @@ package com.audiobookapp.utils
 
 import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.Base64
+import android.util.Base64 as AndroidBase64
 
 object PasswordUtils {
     // Simple SHA-256 + salt approach (sufficient for local on-device storage)
@@ -29,7 +29,7 @@ object PasswordUtils {
     private fun generateSalt(): String {
         val bytes = ByteArray(16)
         SecureRandom().nextBytes(bytes)
-        return Base64.getEncoder().encodeToString(bytes)
+        return AndroidBase64.encodeToString(bytes, AndroidBase64.NO_WRAP)
     }
 
     private fun sha256(input: String): String {
