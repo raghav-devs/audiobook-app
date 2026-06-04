@@ -9,6 +9,10 @@ import com.audiobookapp.utils.SessionManager
 import com.audiobookapp.utils.TextExtractor
 import com.audiobookapp.utils.TtsConverter
 import com.audiobookapp.utils.getAudioDurationMs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -20,6 +24,9 @@ class ConversionWorker(
     appContext: Context,
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
+
+    // Fire-and-forget scope for suspend DB calls inside non-suspend TTS callback
+    private val ioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     companion object {
         const val KEY_URI         = "uri"
@@ -100,18 +107,21 @@ class ConversionWorker(
             val book = db.audioBookDao().getBookById(bookId) ?: return Result.failure()
             val outputFile = File(book.mp3FilePath)
 
+            var markedPlayable = book.isPlayable
+
             val converter = TtsConverter(applicationContext) { progress ->
+                // Non-suspend lambda — use setProgressAsync and ioScope for DB ops
                 setProgressAsync(workDataOf(
                     KEY_STAGE    to STAGE_CONVERTING,
                     KEY_PROGRESS to progress,
                     KEY_BOOK_ID  to bookId
                 ))
-                // Update DB so LibraryFragment progress bar updates live
-                db.audioBookDao().updateConversionProgress(bookId, progress)
-
-                // Mark playable once first 10% is written (streaming start point)
-                if (progress >= 10 && !book.isPlayable) {
-                    db.audioBookDao().markPlayable(bookId)
+                ioScope.launch {
+                    db.audioBookDao().updateConversionProgress(bookId, progress)
+                    if (progress >= 10 && !markedPlayable) {
+                        db.audioBookDao().markPlayable(bookId)
+                        markedPlayable = true
+                    }
                 }
             }
 
