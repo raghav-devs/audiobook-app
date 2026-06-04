@@ -12,7 +12,20 @@
           "package_name": "com.audiobookapp"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "786678251032-eh9g6fb9qcedjrjpuvve2u5ilnc6ojjk.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.audiobookapp",
+            "certificate_hash": "58898911ae824d70cf5a44ec4e01e128cfffb097"
+          }
+        },
+        {
+          "client_id": "786678251032-sd9tuvtu3l417d3nv4r8b5sukmjgatcg.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAr4xvQs6IwMmrjK3_bEO5pW5968IM36KU"
@@ -20,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "786678251032-sd9tuvtu3l417d3nv4r8b5sukmjgatcg.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

@@ -29,9 +29,11 @@ class LoginFragment : Fragment() {
             val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
             try {
                 val account = task.getResult(ApiException::class.java)
-                val googleId = account.id ?: return@registerForActivityResult
-                val email = account.email ?: ""
+                val googleId   = account.id ?: return@registerForActivityResult
+                val email      = account.email ?: ""
                 val displayName = account.displayName ?: email
+                val idToken    = account.idToken  // available because we called requestIdToken()
+                Log.d("GoogleSignIn", "Sign-in OK — id=$googleId email=$email idToken=${idToken?.take(20)}…")
                 viewModel.saveGoogleSession(googleId, email, displayName)
                 (activity as AuthActivity).startMain()
             } catch (e: ApiException) {
@@ -102,12 +104,18 @@ class LoginFragment : Fragment() {
     }
 
     private fun launchGoogleSignIn() {
+        // Web Client ID (client_type 3) from google-services.json
+        // Required for requestIdToken() — without this, sign-in returns error 10
+        val webClientId = "786678251032-sd9tuvtu3l417d3nv4r8b5sukmjgatcg.apps.googleusercontent.com"
+
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(webClientId)
             .requestEmail()
             .requestId()
             .requestProfile()
             .build()
-        // Sign out first to force account picker every time
+
+        // Sign out first to force account picker on every tap
         val client = GoogleSignIn.getClient(requireActivity(), gso)
         client.signOut().addOnCompleteListener {
             googleSignInLauncher.launch(client.signInIntent)
