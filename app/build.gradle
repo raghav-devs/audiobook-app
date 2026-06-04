@@ -17,10 +17,10 @@ android {
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
-    }
 
     buildTypes {
         debug {
+            // AGP applies default debug signing automatically
         }
         release {
             minifyEnabled false
@@ -90,7 +90,6 @@ dependencies {
     implementation 'androidx.work:work-runtime-ktx:2.9.0'
 
     // ML Kit OCR — on-device, no internet required
-    // Text Recognition v2: Latin script (English) + Devanagari script (Hindi)
     implementation 'com.google.mlkit:text-recognition:16.0.0'
     implementation 'com.google.mlkit:text-recognition-devanagari:16.0.0'
 
@@ -101,7 +100,6 @@ dependencies {
     implementation 'org.apache.poi:poi-ooxml:5.2.3'
     implementation 'org.apache.poi:poi:5.2.3'
 
-
     // Media3 (ExoPlayer) for audio playback
     implementation 'androidx.media3:media3-exoplayer:1.2.1'
     implementation 'androidx.media3:media3-ui:1.2.1'
@@ -110,7 +108,7 @@ dependencies {
     // Security (encrypted SharedPrefs for local auth)
     implementation 'androidx.security:security-crypto:1.1.0-alpha06'
 
-    // Glide for any image loading
+    // Glide for image loading
     implementation 'com.github.bumptech.glide:glide:4.16.0'
 
     // Testing
