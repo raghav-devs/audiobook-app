@@ -35,6 +35,7 @@ sealed class ExportState {
 }
 
 
+sealed class PlayerStatus {
     object Idle : PlayerStatus()
     object Loading : PlayerStatus()
     object Ready : PlayerStatus()
