@@ -7,76 +7,78 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.File
+import java.io.RandomAccessFile
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
 
-/**
- * Converts plain text to an MP3 file using Android's built-in TextToSpeech engine.
- *
- * Android TTS synthesisToFile() produces a WAV by default on most devices.
- * We chunk the text (TTS has a ~4000 char per-utterance limit) and merge chunks.
- * After synthesis we re-encode to MP3 using MediaCodec (API 26+).
- *
- * NOTE: Android TTS output is device/engine-dependent. Some devices produce
- * MP3 directly; others produce WAV. We name the output .mp3 but the actual
- * codec depends on the installed TTS engine.
- */
 class TtsConverter(
     private val context: Context,
-    private val onProgress: (Int) -> Unit
+    private val onProgress: (Int) -> Unit,
+    private val onChunkReady: ((bytesWritten: Long) -> Unit)? = null
 ) {
-
     companion object {
-        private const val CHUNK_SIZE = 3800   // chars per TTS utterance (safe limit)
-        private const val UTTERANCE_PREFIX = "chunk_"
+        private const val CHUNK_SIZE = 3800
+        private const val UTTERANCE_PRE = "chunk_"
+        const val PLAYABLE_THRESHOLD_BYTES = 88_200L  // ~2 seconds of audio
     }
 
-    private var tts: TextToSpeech? = null
-
-    /**
-     * Synchronously initialises TTS and converts [text] to an MP3 saved at [outputFile].
-     * Returns true on success.
-     */
     suspend fun convert(text: String, outputFile: File): Boolean =
-        suspendCancellableCoroutine { cont ->
-            tts = TextToSpeech(context) { status ->
-                if (status == TextToSpeech.ERROR) {
-                    cont.resume(false)
-                    return@TextToSpeech
-                }
+        convertChunks(splitIntoChunks(text), outputFile)
 
+    suspend fun convertPages(pages: List<String>, outputFile: File): Boolean =
+        convertChunks(pages.flatMap { splitIntoChunks(it) }, outputFile)
+
+    private suspend fun convertChunks(chunks: List<String>, outputFile: File): Boolean =
+        suspendCancellableCoroutine { cont ->
+            if (chunks.isEmpty()) { cont.resume(false); return@suspendCancellableCoroutine }
+
+            var tts: TextToSpeech? = null
+            tts = TextToSpeech(context) { status ->
+                if (status == TextToSpeech.ERROR) { cont.resume(false); return@TextToSpeech }
                 val engine = tts ?: run { cont.resume(false); return@TextToSpeech }
+
                 engine.language = Locale.getDefault().let { loc ->
-                    // Prefer English if device locale unsupported
                     if (engine.isLanguageAvailable(loc) == TextToSpeech.LANG_AVAILABLE) loc
                     else Locale.US
                 }
-                engine.setSpeechRate(0.95f)  // Slightly slower — more natural for listening
+                engine.setSpeechRate(0.95f)
 
-                val chunks = splitIntoChunks(text)
-                val chunkFiles = mutableListOf<File>()
-                var completed = 0
-                var hasFailed = false
+                // Write placeholder WAV header — ExoPlayer plays WAV with size=0 fine
+                writePlaceholderWavHeader(outputFile)
+
+                val chunkFiles   = Array(chunks.size) { i -> File(context.cacheDir, "tts_chunk_$i.wav") }
+                val completed    = AtomicInteger(0)
+                val totalPcmSize = AtomicInteger(0)
+                var hasFailed    = false
 
                 engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) {}
+                    override fun onStart(id: String?) {}
 
-                    override fun onDone(utteranceId: String?) {
+                    override fun onDone(id: String?) {
                         if (hasFailed) return
-                        completed++
-                        val progress = (completed * 100) / chunks.size
-                        onProgress(progress)
+                        val index = id?.removePrefix(UTTERANCE_PRE)?.toIntOrNull() ?: return
+                        val chunkFile = chunkFiles[index]
 
-                        if (completed == chunks.size) {
-                            // All chunks done — merge WAV files into output
-                            val success = mergeAudioFiles(chunkFiles, outputFile)
-                            chunkFiles.forEach { it.delete() }
+                        if (chunkFile.exists() && chunkFile.length() > 44) {
+                            val pcm = chunkFile.readBytes().drop(44).toByteArray()
+                            appendPcmToFile(outputFile, pcm)
+                            totalPcmSize.addAndGet(pcm.size)
+                            chunkFile.delete()
+                            onChunkReady?.invoke(outputFile.length())
+                        }
+
+                        val done = completed.incrementAndGet()
+                        onProgress((done * 100) / chunks.size)
+
+                        if (done == chunks.size) {
+                            patchWavHeader(outputFile, totalPcmSize.get().toLong())
                             engine.shutdown()
-                            cont.resume(success)
+                            cont.resume(true)
                         }
                     }
 
-                    override fun onError(utteranceId: String?) {
+                    override fun onError(id: String?) {
                         hasFailed = true
                         chunkFiles.forEach { it.delete() }
                         engine.shutdown()
@@ -84,135 +86,65 @@ class TtsConverter(
                     }
                 })
 
-                // Enqueue all chunks
-                chunks.forEachIndexed { index, chunk ->
-                    val chunkFile = File(context.cacheDir, "tts_chunk_${index}.wav")
-                    chunkFiles.add(chunkFile)
+                chunks.forEachIndexed { i, chunk ->
                     val params = Bundle()
-                    params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID,
-                        "$UTTERANCE_PREFIX$index")
-                    val queueMode = if (index == 0) TextToSpeech.QUEUE_FLUSH
-                                    else TextToSpeech.QUEUE_ADD
-                    engine.synthesizeToFile(chunk, params, chunkFile,
-                        "$UTTERANCE_PREFIX$index")
+                    params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "$UTTERANCE_PRE$i")
+                    engine.synthesizeToFile(chunk, params, chunkFiles[i], "$UTTERANCE_PRE$i")
                 }
 
                 cont.invokeOnCancellation {
-                    engine.stop()
-                    engine.shutdown()
+                    engine.stop(); engine.shutdown()
                     chunkFiles.forEach { it.delete() }
                 }
             }
         }
 
-    /**
-     * Split text into chunks respecting sentence boundaries where possible.
-     */
+    private fun writePlaceholderWavHeader(file: File) {
+        file.outputStream().use { out ->
+            val header = ByteArray(44)
+            "RIFF".toByteArray().copyInto(header, 0)
+            "WAVE".toByteArray().copyInto(header, 8)
+            "fmt ".toByteArray().copyInto(header, 12)
+            intToBytes(16).copyInto(header, 16)
+            shortToBytes(1).copyInto(header, 20)   // PCM
+            shortToBytes(1).copyInto(header, 22)   // mono
+            intToBytes(22050).copyInto(header, 24) // sample rate
+            intToBytes(44100).copyInto(header, 28) // byte rate
+            shortToBytes(2).copyInto(header, 32)   // block align
+            shortToBytes(16).copyInto(header, 34)  // bits per sample
+            "data".toByteArray().copyInto(header, 36)
+            out.write(header)
+        }
+    }
+
+    private fun appendPcmToFile(file: File, pcm: ByteArray) {
+        RandomAccessFile(file, "rw").use { raf ->
+            raf.seek(raf.length()); raf.write(pcm)
+        }
+    }
+
+    private fun patchWavHeader(file: File, pcmSize: Long) {
+        RandomAccessFile(file, "rw").use { raf ->
+            raf.seek(4);  raf.write(intToBytes((pcmSize + 36).toInt()))
+            raf.seek(40); raf.write(intToBytes(pcmSize.toInt()))
+        }
+    }
+
     private fun splitIntoChunks(text: String): List<String> {
-        if (text.length <= CHUNK_SIZE) return listOf(text)
+        if (text.length <= CHUNK_SIZE) return listOf(text).filter { it.isNotBlank() }
         val chunks = mutableListOf<String>()
         var start = 0
         while (start < text.length) {
             var end = minOf(start + CHUNK_SIZE, text.length)
             if (end < text.length) {
-                // Try to break at sentence boundary
-                val lastPeriod = text.lastIndexOf('.', end)
-                val lastNewline = text.lastIndexOf('\n', end)
-                val boundary = maxOf(lastPeriod, lastNewline)
-                if (boundary > start + CHUNK_SIZE / 2) {
-                    end = boundary + 1
-                }
+                val boundary = maxOf(text.lastIndexOf('.', end), text.lastIndexOf('\n', end))
+                if (boundary > start + CHUNK_SIZE / 2) end = boundary + 1
             }
-            chunks.add(text.substring(start, end).trim())
+            val chunk = text.substring(start, end).trim()
+            if (chunk.isNotBlank()) chunks.add(chunk)
             start = end
         }
-        return chunks.filter { it.isNotBlank() }
-    }
-
-    /**
-     * Merge multiple WAV/audio chunk files into a single output file.
-     * For WAV files this concatenates raw PCM data after stripping individual headers
-     * and writing one combined header.
-     * Falls back to simple file concatenation for other formats.
-     */
-    private fun mergeAudioFiles(chunkFiles: List<File>, output: File): Boolean {
-        return try {
-            if (chunkFiles.isEmpty()) return false
-            if (chunkFiles.size == 1) {
-                chunkFiles[0].copyTo(output, overwrite = true)
-                return true
-            }
-
-            // Collect PCM data from all WAV chunks (skip 44-byte WAV header each)
-            val pcmData = mutableListOf<ByteArray>()
-            var totalPcmSize = 0L
-            var sampleRate = 22050
-            var numChannels: Short = 1
-            var bitsPerSample: Short = 16
-
-            for (file in chunkFiles) {
-                if (!file.exists() || file.length() < 44) continue
-                val bytes = file.readBytes()
-                // Parse WAV header for first file
-                if (pcmData.isEmpty()) {
-                    sampleRate = readInt(bytes, 24)
-                    numChannels = readShort(bytes, 22)
-                    bitsPerSample = readShort(bytes, 34)
-                }
-                val pcm = bytes.drop(44).toByteArray()
-                pcmData.add(pcm)
-                totalPcmSize += pcm.size
-            }
-
-            // Write combined WAV
-            output.outputStream().use { out ->
-                writeWavHeader(out, totalPcmSize, sampleRate, numChannels, bitsPerSample)
-                pcmData.forEach { out.write(it) }
-            }
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
-    }
-
-    private fun readInt(bytes: ByteArray, offset: Int): Int =
-        (bytes[offset].toInt() and 0xFF) or
-        ((bytes[offset+1].toInt() and 0xFF) shl 8) or
-        ((bytes[offset+2].toInt() and 0xFF) shl 16) or
-        ((bytes[offset+3].toInt() and 0xFF) shl 24)
-
-    private fun readShort(bytes: ByteArray, offset: Int): Short =
-        ((bytes[offset].toInt() and 0xFF) or
-        ((bytes[offset+1].toInt() and 0xFF) shl 8)).toShort()
-
-    private fun writeWavHeader(
-        out: java.io.OutputStream,
-        pcmSize: Long,
-        sampleRate: Int,
-        channels: Short,
-        bitsPerSample: Short
-    ) {
-        val byteRate = sampleRate * channels * bitsPerSample / 8
-        val blockAlign = (channels * bitsPerSample / 8).toShort()
-        val header = ByteArray(44)
-        // RIFF chunk
-        "RIFF".toByteArray().copyInto(header, 0)
-        intToBytes((pcmSize + 36).toInt()).copyInto(header, 4)
-        "WAVE".toByteArray().copyInto(header, 8)
-        // fmt sub-chunk
-        "fmt ".toByteArray().copyInto(header, 12)
-        intToBytes(16).copyInto(header, 16)           // SubChunk1Size
-        shortToBytes(1).copyInto(header, 20)           // PCM format
-        shortToBytes(channels.toInt()).copyInto(header, 22)
-        intToBytes(sampleRate).copyInto(header, 24)
-        intToBytes(byteRate).copyInto(header, 28)
-        shortToBytes(blockAlign.toInt()).copyInto(header, 32)
-        shortToBytes(bitsPerSample.toInt()).copyInto(header, 34)
-        // data sub-chunk
-        "data".toByteArray().copyInto(header, 36)
-        intToBytes(pcmSize.toInt()).copyInto(header, 40)
-        out.write(header)
+        return chunks
     }
 
     private fun intToBytes(v: Int) = byteArrayOf(
@@ -224,16 +156,11 @@ class TtsConverter(
     )
 }
 
-/** Returns duration of an audio file in milliseconds. */
 fun getAudioDurationMs(file: File): Long {
     return try {
-        val retriever = MediaMetadataRetriever()
-        retriever.setDataSource(file.absolutePath)
-        val duration = retriever.extractMetadata(
-            MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-        retriever.release()
-        duration
-    } catch (e: Exception) {
-        0L
-    }
+        val r = MediaMetadataRetriever()
+        r.setDataSource(file.absolutePath)
+        val d = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+        r.release(); d
+    } catch (e: Exception) { 0L }
 }

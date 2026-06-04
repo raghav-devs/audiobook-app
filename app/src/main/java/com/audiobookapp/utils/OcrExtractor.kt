@@ -9,145 +9,82 @@ import android.os.ParcelFileDescriptor
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-/**
- * OCR extractor for scanned PDFs using Android's built-in PdfRenderer
- * and ML Kit Text Recognition v2.
- *
- * Supports:
- *   - Latin script  (English, and other Latin-alphabet languages)
- *   - Devanagari    (Hindi, Marathi, Sanskrit, Nepali)
- *
- * Both models are bundled in the APK (no network call needed at runtime).
- * PdfRenderer is part of android.graphics (API 21+) — no extra dependency.
- *
- * Render resolution: 300 DPI equivalent (scaling = 300/72 = 4.17×).
- * Higher DPI → better OCR accuracy but more memory per page.
- * Pages are rendered and released one at a time to avoid OOM.
- */
 object OcrExtractor {
 
-    // Render at ~200 DPI for a good accuracy/memory balance.
-    // 72 pt = 1 inch on PDF canvas; ×2.78 ≈ 200 DPI on most phone screens.
     private const val RENDER_SCALE = 2.78f
 
-    /**
-     * Run OCR on every page of a PDF file.
-     *
-     * @param context      Application context
-     * @param pdfFile      The PDF file on disk (must be seekable — copy from Uri first if needed)
-     * @param onPageDone   Called after each page with (pagesDone, totalPages)
-     * @return Full extracted text, or null if the file cannot be opened
-     */
-    suspend fun extractFromPdf(
-        context: Context,
-        pdfFile: File,
-        onPageDone: ((done: Int, total: Int) -> Unit)? = null
-    ): String? = withContext(Dispatchers.IO) {
-
-        val pfd = ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY)
-            ?: return@withContext null
-
-        val renderer = try {
-            PdfRenderer(pfd)
-        } catch (e: Exception) {
-            pfd.close()
-            return@withContext null
-        }
-
-        // ML Kit recognisers — one per script
-        val latinRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-        val devanagariRecognizer = TextRecognition.getClient(
-            DevanagariTextRecognizerOptions.Builder().build()
-        )
-
-        val pageCount = renderer.pageCount
-        val sb = StringBuilder()
-
-        try {
-            for (i in 0 until pageCount) {
-                val page = renderer.openPage(i)
-
-                // Allocate bitmap at scaled resolution
-                val width  = (page.width  * RENDER_SCALE).toInt()
-                val height = (page.height * RENDER_SCALE).toInt()
-                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-
-                // Fill white background (PDF pages are transparent by default)
-                val canvas = Canvas(bitmap)
-                canvas.drawColor(Color.WHITE)
-
-                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                page.close()
-
-                // Run both recognisers concurrently and merge results
-                val latinText     = recognise(latinRecognizer, bitmap)
-                val devanagariText = recognise(devanagariRecognizer, bitmap)
-
-                // Pick the script with more content for this page
-                val pageText = mergeScripts(latinText, devanagariText)
-                if (pageText.isNotBlank()) {
-                    sb.append(pageText).append("\n\n")
-                }
-
-                bitmap.recycle()
-                onPageDone?.invoke(i + 1, pageCount)
+    fun extractPagesAsFlow(context: Context, pdfFile: File): Flow<Triple<String, Int, Int>> =
+        callbackFlow {
+            val pfd = ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY)
+            val renderer = try { PdfRenderer(pfd) } catch (e: Exception) {
+                pfd.close(); close(e); return@callbackFlow
             }
-        } finally {
-            renderer.close()
-            pfd.close()
-            latinRecognizer.close()
-            devanagariRecognizer.close()
-        }
+            val latin      = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            val devanagari = TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())
+            val total      = renderer.pageCount
+            try {
+                for (i in 0 until total) {
+                    val page   = renderer.openPage(i)
+                    val bmp    = Bitmap.createBitmap(
+                        (page.width  * RENDER_SCALE).toInt(),
+                        (page.height * RENDER_SCALE).toInt(),
+                        Bitmap.Config.ARGB_8888
+                    )
+                    Canvas(bmp).drawColor(Color.WHITE)
+                    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    page.close()
+                    val text = mergeScripts(recognise(latin, bmp), recognise(devanagari, bmp))
+                    bmp.recycle()
+                    if (text.isNotBlank()) send(Triple(text, i, total))
+                }
+            } finally {
+                renderer.close(); pfd.close(); latin.close(); devanagari.close(); close()
+            }
+            awaitClose()
+        }.flowOn(Dispatchers.IO)
 
+    suspend fun extractFromPdf(
+        context: Context, pdfFile: File,
+        onPageDone: ((Int, Int) -> Unit)? = null
+    ): String? = withContext(Dispatchers.IO) {
+        val sb = StringBuilder(); var count = 0
+        try {
+            extractPagesAsFlow(context, pdfFile).collect { (text, _, total) ->
+                sb.append(text).append("\n\n"); count++; onPageDone?.invoke(count, total)
+            }
+        } catch (e: Exception) { return@withContext null }
         sb.toString().trim().takeIf { it.isNotBlank() }
     }
 
-    /**
-     * Suspend wrapper around ML Kit's callback-based recognise() call.
-     */
-    private suspend fun recognise(
-        recognizer: TextRecognizer,
-        bitmap: Bitmap
-    ): String = suspendCancellableCoroutine { cont ->
-        val image = InputImage.fromBitmap(bitmap, 0)
-        recognizer.process(image)
-            .addOnSuccessListener { result -> cont.resume(result.text) }
-            .addOnFailureListener { e -> cont.resumeWithException(e) }
-    }
+    private suspend fun recognise(r: TextRecognizer, bmp: Bitmap): String =
+        suspendCancellableCoroutine { cont ->
+            r.process(InputImage.fromBitmap(bmp, 0))
+                .addOnSuccessListener { cont.resume(it.text) }
+                .addOnFailureListener { cont.resumeWithException(it) }
+        }
 
-    /**
-     * Merge Latin and Devanagari results from the same page.
-     *
-     * Strategy:
-     * - If one result is substantially longer, use it.
-     * - If both have content (mixed-script page), interleave by line position
-     *   is not possible without bounding boxes here, so we append both
-     *   and let TTS handle the mix (Android TTS switches voice for Hindi chars).
-     * - Blank results are discarded.
-     */
-    private fun mergeScripts(latin: String, devanagari: String): String {
-        val latinClean     = latin.trim()
-        val devanagariClean = devanagari.trim()
-
+    private fun mergeScripts(l: String, d: String): String {
+        val lt = l.trim(); val dt = d.trim()
         return when {
-            latinClean.isBlank() && devanagariClean.isBlank() -> ""
-            latinClean.isBlank()  -> devanagariClean
-            devanagariClean.isBlank() -> latinClean
-            // Both have content — mixed-script page
-            // Devanagari recogniser often also picks up Latin on mixed pages;
-            // use the longer result if ratio > 2:1, otherwise append both
-            latinClean.length > devanagariClean.length * 2 -> latinClean
-            devanagariClean.length > latinClean.length * 2 -> devanagariClean
-            else -> "$latinClean\n$devanagariClean"
+            lt.isBlank() && dt.isBlank() -> ""
+            lt.isBlank()  -> dt
+            dt.isBlank()  -> lt
+            lt.length > dt.length * 2 -> lt
+            dt.length > lt.length * 2 -> dt
+            else -> "$lt\n$dt"
         }
     }
 }
